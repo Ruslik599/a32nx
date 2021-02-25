@@ -53,6 +53,9 @@ class FlyByWireInterface {
 
   double previousSimulationTime = 0;
 
+  int currentApproachCapability = 0;
+  double previousApproachCapabilityUpdateTime = 0;
+
   bool flightDirectorSmoothingEnabled = false;
   double flightDirectorSmoothingFactor = 0;
   double flightDirectorSmoothingLimit = 0;

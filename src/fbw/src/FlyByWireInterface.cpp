@@ -247,8 +247,7 @@ bool FlyByWireInterface::updateAutopilotStateMachine(double sampleTime) {
         get_named_variable_value(idFcuTrkFpaModeActive);
     autopilotStateMachine.AutopilotStateMachine_U.in.input.DIR_TO_trigger = 0;
 
-    // step the model
-    // -------------------------------------------------------------------------------------------------
+    // step the model -------------------------------------------------------------------------------------------------
     autopilotStateMachine.step();
 
     // result
@@ -322,24 +321,79 @@ bool FlyByWireInterface::updateAutopilotStateMachine(double sampleTime) {
   set_named_variable_value(idFmaSoftAltModeActive, autopilotStateMachineOutput.ALT_soft_mode_active);
 
   // calculate and set approach capability
+  // when no RA is available at all -> CAT1, at least one RA is needed to get into CAT2 or higher
+  // CAT3 requires two valid RA which are not simulated yet
   bool landModeArmedOrActive = (isLocArmed || isLocEngaged) && (isGsArmed || isGsEngaged);
   int numberOfAutopilotsEngaged = autopilotStateMachineOutput.enabled_AP1 + autopilotStateMachineOutput.enabled_AP2;
   int autoThrustEngaged = simData.isAutoThrottleActive;
   bool radioAltimeterAvailable = (simData.H_radio_ft <= 5000);
-  int approachCapability = 0;
-  if (landModeArmedOrActive) {
-    approachCapability = 1;
-    if (numberOfAutopilotsEngaged >= 1) {
-      approachCapability = 2;
-      if (autoThrustEngaged && radioAltimeterAvailable) {
-        approachCapability = 3;
-        if (numberOfAutopilotsEngaged == 2) {
-          approachCapability = 4;
-        }
+  bool isCat1 = landModeArmedOrActive;
+  bool isCat2 =
+      landModeArmedOrActive && radioAltimeterAvailable && !autoThrustEngaged && numberOfAutopilotsEngaged >= 1;
+  bool isCat3S =
+      landModeArmedOrActive && radioAltimeterAvailable && autoThrustEngaged && numberOfAutopilotsEngaged >= 1;
+  bool isCat3D =
+      landModeArmedOrActive && radioAltimeterAvailable && autoThrustEngaged && numberOfAutopilotsEngaged == 2;
+  int newApproachCapability = currentApproachCapability;
+
+  if (currentApproachCapability == 0) {
+    if (isCat1) {
+      newApproachCapability = 1;
+    }
+  } else if (currentApproachCapability == 1) {
+    if (!isCat1) {
+      newApproachCapability = 0;
+    }
+    if (isCat3S) {
+      newApproachCapability = 3;
+    } else if (isCat2) {
+      newApproachCapability = 2;
+    }
+  } else if (currentApproachCapability == 2) {
+    if (isCat3D) {
+      newApproachCapability = 4;
+    } else if (isCat3S) {
+      newApproachCapability = 3;
+    } else if (!isCat2) {
+      newApproachCapability = 1;
+    }
+  } else if (currentApproachCapability == 3) {
+    if ((simData.H_radio_ft > 100) || (simData.H_radio_ft < 100 && numberOfAutopilotsEngaged == 0)) {
+      if (isCat3D) {
+        newApproachCapability = 4;
+      } else if (!isCat3S && !isCat2) {
+        newApproachCapability = 1;
+      } else if (!isCat3S && isCat2) {
+        newApproachCapability = 2;
+      }
+    }
+  } else if (currentApproachCapability == 4) {
+    if ((simData.H_radio_ft > 100) || (simData.H_radio_ft < 100 && numberOfAutopilotsEngaged == 0)) {
+      if (!autoThrustEngaged) {
+        newApproachCapability = 2;
+      } else if (!isCat3D) {
+        newApproachCapability = 3;
       }
     }
   }
-  set_named_variable_value(idFmaApproachCapability, approachCapability);
+
+  bool doUpdate = false;
+  bool canDowngrade = (simData.simulationTime - previousApproachCapabilityUpdateTime) > 3.0;
+  bool canUpgrade = (simData.simulationTime - previousApproachCapabilityUpdateTime) > 1.5;
+  if (newApproachCapability != currentApproachCapability) {
+    doUpdate = (newApproachCapability == 0 && currentApproachCapability == 1) ||
+               (newApproachCapability == 1 && currentApproachCapability == 0) ||
+               (newApproachCapability > currentApproachCapability && canUpgrade) ||
+               (newApproachCapability < currentApproachCapability && canDowngrade);
+  } else {
+    previousApproachCapabilityUpdateTime = simData.simulationTime;
+  }
+
+  if (doUpdate) {
+    currentApproachCapability = newApproachCapability;
+    set_named_variable_value(idFmaApproachCapability, currentApproachCapability);
+    previousApproachCapabilityUpdateTime = simData.simulationTime;
+  }
 
   // return result ----------------------------------------------------------------------------------------------------
   return true;
